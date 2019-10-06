@@ -1,12 +1,12 @@
 /*
  * Copyright 2014 Thomas Hoffmann
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -18,7 +18,7 @@ package de.j4velin.pedometer.ui;
 import android.Manifest;
 import android.app.AlertDialog;
 import android.app.Dialog;
-import android.content.ComponentName;
+import android.app.NotificationManager;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnClickListener;
@@ -30,7 +30,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.preference.Preference;
-import android.preference.Preference.OnPreferenceChangeListener;
 import android.preference.Preference.OnPreferenceClickListener;
 import android.preference.PreferenceFragment;
 import android.view.Menu;
@@ -52,10 +51,10 @@ import java.io.IOException;
 import java.util.Locale;
 
 import de.j4velin.pedometer.Database;
-import de.j4velin.pedometer.PowerReceiver;
 import de.j4velin.pedometer.R;
 import de.j4velin.pedometer.SensorListener;
 import de.j4velin.pedometer.util.API23Wrapper;
+import de.j4velin.pedometer.util.API26Wrapper;
 import de.j4velin.pedometer.util.PlaySettingsWrapper;
 
 public class Fragment_Settings extends PreferenceFragment implements OnPreferenceClickListener {
@@ -69,44 +68,39 @@ public class Fragment_Settings extends PreferenceFragment implements OnPreferenc
         super.onCreate(savedInstanceState);
 
         addPreferencesFromResource(R.xml.settings);
+
+        final SharedPreferences prefs =
+                getActivity().getSharedPreferences("pedometer", Context.MODE_PRIVATE);
+
         findPreference("import").setOnPreferenceClickListener(this);
         findPreference("export").setOnPreferenceClickListener(this);
+        if (Build.VERSION.SDK_INT >= 26) {
+            findPreference("notification").setOnPreferenceClickListener(this);
+        } else {
+            findPreference("notification")
+                    .setOnPreferenceChangeListener(new Preference.OnPreferenceChangeListener() {
+                        @Override
+                        public boolean onPreferenceChange(final Preference preference,
+                                                          final Object newValue) {
+                            prefs.edit().putBoolean("notification", (Boolean) newValue).apply();
 
-        findPreference("notification")
-                .setOnPreferenceChangeListener(new OnPreferenceChangeListener() {
-                    @Override
-                    public boolean onPreferenceChange(final Preference preference,
-                                                      final Object newValue) {
-                        getActivity().getSharedPreferences("pedometer", Context.MODE_PRIVATE).edit()
-                                .putBoolean("notification", (Boolean) newValue).commit();
+                            NotificationManager manager = (NotificationManager) getActivity()
+                                    .getSystemService(Context.NOTIFICATION_SERVICE);
+                            if ((Boolean) newValue) {
+                                manager.notify(SensorListener.NOTIFICATION_ID,
+                                        SensorListener.getNotification(getActivity()));
+                            } else {
+                                manager.cancel(SensorListener.NOTIFICATION_ID);
+                            }
 
-                        getActivity().startService(new Intent(getActivity(), SensorListener.class)
-                                .putExtra(SensorListener.ACTION_UPDATE_NOTIFICATION, true));
-                        return true;
-                    }
-                });
-
-        findPreference("pause_on_power")
-                .setOnPreferenceChangeListener(new OnPreferenceChangeListener() {
-                    @Override
-                    public boolean onPreferenceChange(final Preference preference,
-                                                      final Object newValue) {
-                        getActivity().getPackageManager().setComponentEnabledSetting(
-                                new ComponentName(getActivity(), PowerReceiver.class),
-                                ((Boolean) newValue) ?
-                                        PackageManager.COMPONENT_ENABLED_STATE_ENABLED :
-                                        PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                                PackageManager.DONT_KILL_APP);
-                        return true;
-                    }
-                });
+                            return true;
+                        }
+                    });
+        }
 
         Preference account = findPreference("account");
         PlaySettingsWrapper
                 .setupAccountSetting(account, savedInstanceState, (Activity_Main) getActivity());
-
-        final SharedPreferences prefs =
-                getActivity().getSharedPreferences("pedometer", Context.MODE_PRIVATE);
 
         Preference goal = findPreference("goal");
         goal.setOnPreferenceClickListener(this);
@@ -131,6 +125,10 @@ public class Fragment_Settings extends PreferenceFragment implements OnPreferenc
     public void onResume() {
         super.onResume();
         getActivity().getActionBar().setDisplayHomeAsUpEnabled(true);
+        if (Build.VERSION.SDK_INT >= 26) { // notification settings might have changed
+            API26Wrapper.startForegroundService(getActivity(),
+                    new Intent(getActivity(), SensorListener.class));
+        }
     }
 
     @Override
@@ -142,7 +140,6 @@ public class Fragment_Settings extends PreferenceFragment implements OnPreferenc
     public void onPrepareOptionsMenu(final Menu menu) {
         super.onPrepareOptionsMenu(menu);
         menu.findItem(R.id.action_settings).setVisible(false);
-        menu.findItem(R.id.action_pause).setVisible(false);
         menu.findItem(R.id.action_split_count).setVisible(false);
     }
 
@@ -241,6 +238,9 @@ public class Fragment_Settings extends PreferenceFragment implements OnPreferenc
                             Toast.LENGTH_SHORT).show();
                 }
                 break;
+            case R.string.notification_settings:
+                API26Wrapper.launchNotificationSettings(getActivity());
+                break;
         }
         return false;
     }
@@ -291,7 +291,7 @@ public class Fragment_Settings extends PreferenceFragment implements OnPreferenc
     /**
      * Imports previously exported data from a csv file
      * <p/>
-     * Requires external storage to be readable. Skips days for which there is already an entry in the database
+     * Requires external storage to be readable. Overwrites days for which there is already an entry in the database
      */
     private void importCsv() {
         if (Environment.getExternalStorageState().equals(Environment.MEDIA_MOUNTED)) {
@@ -310,7 +310,7 @@ public class Fragment_Settings extends PreferenceFragment implements OnPreferenc
             Database db = Database.getInstance(getActivity());
             String line;
             String[] data;
-            int ignored = 0, inserted = 0, skips = 0;
+            int ignored = 0, inserted = 0, overwritten = 0;
             BufferedReader in;
             try {
                 in = new BufferedReader(new FileReader(f));
@@ -321,7 +321,7 @@ public class Fragment_Settings extends PreferenceFragment implements OnPreferenc
                                 Integer.valueOf(data[1]))) {
                             inserted++;
                         } else {
-                            skips++;
+                            overwritten++;
                         }
                     } catch (Exception nfe) {
                         ignored++;
@@ -342,8 +342,9 @@ public class Fragment_Settings extends PreferenceFragment implements OnPreferenc
             } finally {
                 db.close();
             }
-            String message = getString(R.string.entries_imported, inserted);
-            if (skips > 0) message += "\n\n" + getString(R.string.entries_skipped, skips);
+            String message = getString(R.string.entries_imported, inserted + overwritten);
+            if (overwritten > 0)
+                message += "\n\n" + getString(R.string.entries_overwritten, overwritten);
             if (ignored > 0) message += "\n\n" + getString(R.string.entries_ignored, ignored);
             new AlertDialog.Builder(getActivity()).setMessage(message)
                     .setPositiveButton(android.R.string.ok, new OnClickListener() {

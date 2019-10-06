@@ -1,12 +1,12 @@
 /*
  * Copyright 2014 Thomas Hoffmann
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -22,12 +22,11 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
-import android.graphics.PorterDuff;
-import android.graphics.drawable.Drawable;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Pair;
 import android.view.LayoutInflater;
@@ -54,13 +53,13 @@ import de.j4velin.pedometer.BuildConfig;
 import de.j4velin.pedometer.Database;
 import de.j4velin.pedometer.R;
 import de.j4velin.pedometer.SensorListener;
+import de.j4velin.pedometer.util.API26Wrapper;
 import de.j4velin.pedometer.util.Logger;
 import de.j4velin.pedometer.util.Util;
 
 public class Fragment_Overview extends Fragment implements SensorEventListener {
 
     private TextView stepsView, totalView, averageView;
-
     private PieModel sliceGoal, sliceCurrent;
     private PieChart pg;
 
@@ -72,11 +71,16 @@ public class Fragment_Overview extends Fragment implements SensorEventListener {
     public void onCreate(final Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setHasOptionsMenu(true);
+        if (Build.VERSION.SDK_INT >= 26) {
+            API26Wrapper.startForegroundService(getActivity(),
+                    new Intent(getActivity(), SensorListener.class));
+        } else {
+            getActivity().startService(new Intent(getActivity(), SensorListener.class));
+        }
     }
 
     @Override
-    public View onCreateView(final LayoutInflater inflater, final ViewGroup container,
-                             final Bundle savedInstanceState) {
+    public View onCreateView(final LayoutInflater inflater, final ViewGroup container, final Bundle savedInstanceState) {
         final View v = inflater.inflate(R.layout.fragment_overview, null);
         stepsView = (TextView) v.findViewById(R.id.steps);
         totalView = (TextView) v.findViewById(R.id.total);
@@ -121,32 +125,28 @@ public class Fragment_Overview extends Fragment implements SensorEventListener {
                 getActivity().getSharedPreferences("pedometer", Context.MODE_PRIVATE);
 
         goal = prefs.getInt("goal", Fragment_Settings.DEFAULT_GOAL);
-        since_boot = db.getCurrentSteps(); // do not use the value from the sharedPreferences
+        since_boot = db.getCurrentSteps();
         int pauseDifference = since_boot - prefs.getInt("pauseCount", since_boot);
 
         // register a sensorlistener to live update the UI if a step is taken
-        if (!prefs.contains("pauseCount")) {
-            SensorManager sm =
-                    (SensorManager) getActivity().getSystemService(Context.SENSOR_SERVICE);
-            Sensor sensor = sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER);
-            if (sensor == null) {
-                new AlertDialog.Builder(getActivity()).setTitle(R.string.no_sensor)
-                        .setMessage(R.string.no_sensor_explain)
-                        .setOnDismissListener(new DialogInterface.OnDismissListener() {
-                            @Override
-                            public void onDismiss(final DialogInterface dialogInterface) {
-                                getActivity().finish();
-                            }
-                        }).setNeutralButton(android.R.string.ok,
-                        new DialogInterface.OnClickListener() {
-                            @Override
-                            public void onClick(final DialogInterface dialogInterface, int i) {
-                                dialogInterface.dismiss();
-                            }
-                        }).create().show();
-            } else {
-                sm.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI, 0);
-            }
+        SensorManager sm = (SensorManager) getActivity().getSystemService(Context.SENSOR_SERVICE);
+        Sensor sensor = sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER);
+        if (sensor == null) {
+            new AlertDialog.Builder(getActivity()).setTitle(R.string.no_sensor)
+                    .setMessage(R.string.no_sensor_explain)
+                    .setOnDismissListener(new DialogInterface.OnDismissListener() {
+                        @Override
+                        public void onDismiss(final DialogInterface dialogInterface) {
+                            getActivity().finish();
+                        }
+                    }).setNeutralButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(final DialogInterface dialogInterface, int i) {
+                    dialogInterface.dismiss();
+                }
+            }).create().show();
+        } else {
+            sm.registerListener(this, sensor, SensorManager.SENSOR_DELAY_UI, 0);
         }
 
         since_boot -= pauseDifference;
@@ -189,7 +189,7 @@ public class Fragment_Overview extends Fragment implements SensorEventListener {
                     (SensorManager) getActivity().getSystemService(Context.SENSOR_SERVICE);
             sm.unregisterListener(this);
         } catch (Exception e) {
-            e.printStackTrace();
+            if (BuildConfig.DEBUG) Logger.log(e);
         }
         Database db = Database.getInstance(getActivity());
         db.saveCurrentSteps(since_boot);
@@ -199,18 +199,6 @@ public class Fragment_Overview extends Fragment implements SensorEventListener {
     @Override
     public void onCreateOptionsMenu(final Menu menu, final MenuInflater inflater) {
         inflater.inflate(R.menu.main, menu);
-        MenuItem pause = menu.getItem(0);
-        Drawable d;
-        if (getActivity().getSharedPreferences("pedometer", Context.MODE_PRIVATE)
-                .contains("pauseCount")) { // currently paused
-            pause.setTitle(R.string.resume);
-            d = getResources().getDrawable(R.drawable.ic_resume);
-        } else {
-            pause.setTitle(R.string.pause);
-            d = getResources().getDrawable(R.drawable.ic_pause);
-        }
-        d.setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_ATOP);
-        pause.setIcon(d);
     }
 
     @Override
@@ -219,26 +207,6 @@ public class Fragment_Overview extends Fragment implements SensorEventListener {
             case R.id.action_split_count:
                 Dialog_Split.getDialog(getActivity(),
                         total_start + Math.max(todayOffset + since_boot, 0)).show();
-                return true;
-            case R.id.action_pause:
-                SensorManager sm =
-                        (SensorManager) getActivity().getSystemService(Context.SENSOR_SERVICE);
-                Drawable d;
-                if (getActivity().getSharedPreferences("pedometer", Context.MODE_PRIVATE)
-                        .contains("pauseCount")) { // currently paused -> now resumed
-                    sm.registerListener(this, sm.getDefaultSensor(Sensor.TYPE_STEP_COUNTER),
-                            SensorManager.SENSOR_DELAY_UI, 0);
-                    item.setTitle(R.string.pause);
-                    d = getResources().getDrawable(R.drawable.ic_pause);
-                } else {
-                    sm.unregisterListener(this);
-                    item.setTitle(R.string.resume);
-                    d = getResources().getDrawable(R.drawable.ic_resume);
-                }
-                d.setColorFilter(Color.WHITE, PorterDuff.Mode.SRC_ATOP);
-                item.setIcon(d);
-                getActivity().startService(new Intent(getActivity(), SensorListener.class)
-                        .putExtra("action", SensorListener.ACTION_PAUSE));
                 return true;
             default:
                 return ((Activity_Main) getActivity()).optionsItemSelected(item);
@@ -252,9 +220,9 @@ public class Fragment_Overview extends Fragment implements SensorEventListener {
 
     @Override
     public void onSensorChanged(final SensorEvent event) {
-        if (BuildConfig.DEBUG)
-            Logger.log("UI - sensorChanged | todayOffset: " + todayOffset + " since boot: " +
-                    event.values[0]);
+        if (BuildConfig.DEBUG) Logger.log(
+                "UI - sensorChanged | todayOffset: " + todayOffset + " since boot: " +
+                        event.values[0]);
         if (event.values[0] > Integer.MAX_VALUE || event.values[0] == 0) {
             return;
         }

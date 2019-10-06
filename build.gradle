@@ -1,14 +1,18 @@
 buildscript {
     repositories {
+        google()
+        maven {
+            url 'https://maven.google.com/'
+            name 'Google'
+        }
         jcenter()
     }
-
     dependencies {
         if (rootProject.ext.has("gradle_classpath")) {
             classpath rootProject.ext.gradle_classpath
         } else {
             logger.warn('classpath not found in rootProject')
-            classpath 'com.android.tools.build:gradle:2.3.0'
+            classpath 'com.android.tools.build:gradle:3.0.1'
         }
     }
 }
@@ -22,8 +26,8 @@ android {
         buildToolsVersion rootProject.ext.buildToolsVersion
     } else {
         logger.warn('compileSdkVersion not found in rootProject')
-        compileSdkVersion = 25
-        buildToolsVersion = "25.0.2"
+        compileSdkVersion = 27
+        buildToolsVersion = "27.0.3"
     }
 
     defaultConfig {
@@ -34,9 +38,20 @@ android {
         release
     }
 
+    flavorDimensions "main"
+
     productFlavors {
-        play
-        fdroid
+        play {
+            dimension "main"
+        }
+        fdroid {
+            dimension "main"
+        }
+    }
+
+    lintOptions{
+        disable 'MissingTranslation'
+        disable 'ExtraTranslation'
     }
 
     buildTypes {
@@ -57,16 +72,22 @@ android {
 }
 
 repositories {
+    google()
+    maven {
+        url 'https://maven.google.com/'
+        name 'Google'
+    }
     jcenter()
 }
 
 dependencies {
-    compile 'com.github.j4velin.colorpicker:colorpicker:1.2.3'
-    compile 'com.github.j4velin.EazeGraph:EazeGraph:1.0.2'
-    compile 'com.google.android.apps.dashclock:dashclock-api:2.0.0'
-    playCompile 'com.google.android.gms:play-services-fitness:10.2.1'
-    playCompile 'com.google.android.gms:play-services-games:10.2.1'
-    playCompile 'com.google.android.gms:play-services-identity:10.2.1'
+    implementation 'com.android.support:appcompat-v7:27.1.1'
+    implementation 'com.github.j4velin.colorpicker:colorpicker:1.20.6'
+    implementation 'com.github.j4velin.EazeGraph:EazeGraph:1.0.3'
+    implementation 'com.google.android.apps.dashclock:dashclock-api:2.0.0'
+    playImplementation 'com.google.android.gms:play-services-fitness:15.0.1'
+    playImplementation 'com.google.android.gms:play-services-games:15.0.1'
+    playImplementation 'com.google.android.gms:play-services-identity:15.0.1'
 }
 
 def props = new Properties()

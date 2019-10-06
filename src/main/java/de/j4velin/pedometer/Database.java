@@ -1,12 +1,12 @@
 /*
  * Copyright 2013 Thomas Hoffmann
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  *     http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -139,45 +139,40 @@ public class Database extends SQLiteOpenHelper {
     /**
      * Adds the given number of steps to the last entry in the database
      *
-     * @param steps the number of steps to add. Must be > 0
+     * @param steps the number of steps to add
      */
     public void addToLastEntry(int steps) {
-        if (steps > 0) {
-            getWritableDatabase().execSQL("UPDATE " + DB_NAME + " SET steps = steps + " + steps +
-                    " WHERE date = (SELECT MAX(date) FROM " + DB_NAME + ")");
-        }
+        getWritableDatabase().execSQL("UPDATE " + DB_NAME + " SET steps = steps + " + steps +
+                " WHERE date = (SELECT MAX(date) FROM " + DB_NAME + ")");
     }
 
     /**
-     * Inserts a new entry in the database, if there is no entry for the given
-     * date yet. Use this method for restoring data from a backup.
-     * <p/>
-     * This method does nothing if there is already an entry for 'date'.
+     * Inserts a new entry in the database, overwriting any existing entry for the given date.
+     * Use this method for restoring data from a backup.
      *
      * @param date  the date in ms since 1970
      * @param steps the step value for 'date'; must be >= 0
      * @return true if a new entry was created, false if there was already an
-     * entry for 'date'
+     * entry for 'date' (and it was overwritten)
      */
     public boolean insertDayFromBackup(long date, int steps) {
         getWritableDatabase().beginTransaction();
-        boolean re;
+        boolean newEntryCreated = false;
         try {
-            Cursor c = getReadableDatabase().query(DB_NAME, new String[]{"date"}, "date = ?",
-                    new String[]{String.valueOf(date)}, null, null, null);
-            re = c.getCount() == 0 && steps >= 0;
-            if (re) {
-                ContentValues values = new ContentValues();
+            ContentValues values = new ContentValues();
+            values.put("steps", steps);
+            int updatedRows = getWritableDatabase()
+                    .update(DB_NAME, values, "date = ?", new String[]{String.valueOf(date)});
+            if (updatedRows == 0) {
                 values.put("date", date);
-                values.put("steps", steps);
                 getWritableDatabase().insert(DB_NAME, null, values);
+                newEntryCreated = true;
             }
-            c.close();
             getWritableDatabase().setTransactionSuccessful();
         } finally {
             getWritableDatabase().endTransaction();
         }
-        return re;
+        return newEntryCreated;
     }
 
     /**
@@ -326,6 +321,24 @@ public class Database extends SQLiteOpenHelper {
     /**
      * Get the number of 'valid' days (= days with a step value > 0).
      * <p/>
+     * The current day is not added to this number.
+     *
+     * @return the number of days with a step value > 0, return will be >= 0
+     */
+    public int getDaysWithoutToday() {
+        Cursor c = getReadableDatabase()
+                .query(DB_NAME, new String[]{"COUNT(*)"}, "steps > ? AND date < ? AND date > 0",
+                        new String[]{String.valueOf(0), String.valueOf(Util.getToday())}, null,
+                        null, null);
+        c.moveToFirst();
+        int re = c.getInt(0);
+        c.close();
+        return re < 0 ? 0 : re;
+    }
+
+    /**
+     * Get the number of 'valid' days (= days with a step value > 0).
+     * <p/>
      * The current day is also added to this number, even if the value in the
      * database might still be < 0.
      * <p/>
@@ -335,15 +348,9 @@ public class Database extends SQLiteOpenHelper {
      * @return the number of days with a step value > 0, return will be >= 1
      */
     public int getDays() {
-        Cursor c = getReadableDatabase()
-                .query(DB_NAME, new String[]{"COUNT(*)"}, "steps > ? AND date < ? AND date > 0",
-                        new String[]{String.valueOf(0), String.valueOf(Util.getToday())}, null,
-                        null, null);
-        c.moveToFirst();
         // todays is not counted yet
-        int re = c.getInt(0) + 1;
-        c.close();
-        return re <= 0 ? 1 : re;
+        int re = this.getDaysWithoutToday() + 1;
+        return re;
     }
 
     /**
